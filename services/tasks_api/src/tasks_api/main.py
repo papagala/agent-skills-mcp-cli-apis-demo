@@ -117,3 +117,13 @@ def update_task(task_id: int, payload: UpdateTaskRequest) -> Task:
     refreshed = task.model_copy(update={**updates, "updated_at": _now()})
     _tasks[task_id] = refreshed
     return refreshed
+
+
+@app.post("/admin/reset", response_model=list[Task])
+def reset_demo_data() -> list[Task]:
+    """Wipe all tasks and re-seed the demo dataset. Demo-only convenience."""
+    global _id_sequence
+    _tasks.clear()
+    _id_sequence = count(start=1)
+    _seed_demo_data()
+    return list(_tasks.values())

@@ -585,76 +585,89 @@ def _list_all_tasks_via_api() -> list[dict[str, Any]]:
         return client.get("/tasks").raise_for_status().json()
 
 
-def _render_progress(tasks: list[dict[str, Any]]) -> None:
-    total = len(tasks)
-    if total == 0:
-        return
-    done = sum(1 for task in tasks if task["status"] == "done")
-    open_count = total - done
-    cols = st.columns(3)
-    cols[0].metric("Total tasks", total)
-    cols[1].metric("✅ Done", done)
-    cols[2].metric("⏳ Open", open_count)
-    st.progress(
-        done / total,
-        text=f"**{done} of {total}** tasks completed ({done / total:.0%})",
+def _reset_demo_data_via_api() -> list[dict[str, Any]]:
+    with httpx.Client(base_url=API_BASE_URL, timeout=5.0) as client:
+        return client.post("/admin/reset").raise_for_status().json()
+
+
+def render_reset_control() -> None:
+    if st.button("🔄 Reset demo data", help="Wipe and re-seed tasks"):
+        try:
+            _reset_demo_data_via_api()
+            log_event("info", "Demo data reset via /admin/reset")
+            st.session_state["run_history"] = []
+            st.session_state.pop("selected_task_id", None)
+            st.rerun()
+        except httpx.HTTPError as exc:
+            st.error(f"Reset failed: {exc}")
+
+
+def _render_lesson_banner() -> None:
+    st.markdown(
+        """
+<div style='border-left:4px solid #10b981;padding:10px 16px;
+background:rgba(16,185,129,0.08);border-radius:6px;margin-bottom:8px;'>
+<b>What you're learning</b><br/>
+<span style='color:#cbd5e1;font-size:0.92em;'>
+From Anthropic's <a href='https://claude.com/blog/building-agents-that-reach-production-systems-with-mcp'>
+<i>Building agents that reach production systems with MCP</i></a> &mdash; the same
+user intent (“complete a task with a closing note”) is run through three
+integration paths against one backend. The lesson:
+<b>group tools around intent, not endpoints.</b>
+A single MCP tool collapses what would otherwise be multiple HTTP calls,
+shrinks the agent's <code>SKILL.md</code>, and cuts the prompt-token cost of
+<i>every turn</i> of the agent loop.
+</span>
+</div>
+        """,
+        unsafe_allow_html=True,
     )
+
+
+def _ensure_open_task() -> dict[str, Any]:
+    """Always return a fresh open task. Reset demo data if all are done."""
+    tasks = _list_all_tasks_via_api()
+    open_tasks = [task for task in tasks if task["status"] != "done"]
+    if open_tasks:
+        return open_tasks[0]
+    log_event("info", "All tasks done; auto-resetting demo data")
+    fresh = _reset_demo_data_via_api()
+    return next(task for task in fresh if task["status"] != "done")
 
 
 def render_complete_scenario() -> None:
-    st.subheader("Scenario: complete a task with a closing note")
+    st.subheader("🎯 Same intent, three integration paths")
     st.caption(
-        "This is the article's headline example: an *intent* the API does not "
-        "expose directly. Watch the round-trip count."
+        "Click the button. The same task is completed three ways: a Direct "
+        "API client, a CLI shell, and an MCP tool call. Watch the round trips, "
+        "bytes on the wire, and — below — the prompt tokens a real LLM spends "
+        "to plan each one."
     )
 
+    note = st.text_input(
+        "Closing note (the same note is used for all three paths)",
+        value="rolled back the bad release",
+    )
+    st.session_state["selected_task_note"] = note
+
+    if not st.button(
+        "▶️ Run the comparison",
+        type="primary", use_container_width=True,
+    ):
+        return
+
     try:
-        all_tasks = _list_all_tasks_via_api()
+        target = _ensure_open_task()
     except httpx.HTTPError as exc:
         st.error(f"Could not reach Tasks API at {API_BASE_URL}: {exc}")
         return
 
-    _render_progress(all_tasks)
-
-    open_tasks = [task for task in all_tasks if task["status"] != "done"]
-    if not open_tasks:
-        st.success(
-            "🎉 All tasks are done! Restart the cluster (`make destroy && "
-            "make deploy`) to reset the demo data."
-        )
-        return
-
-    with st.form("complete_form"):
-        recent = sorted(all_tasks, key=lambda t: t["id"], reverse=True)[:12]
-        labels: dict[str, int] = {}
-        for task in recent:
-            icon = "✅" if task["status"] == "done" else "⏳"
-            label = (
-                f"{icon} #{task['id']} · {task['priority']:<6} · "
-                f"{task['assignee']:<8} · {task['title']}"
-            )
-            labels[label] = task["id"]
-        choice = st.selectbox(
-            f"Task (showing {len(recent)} most recent of {len(all_tasks)})",
-            list(labels.keys()),
-        )
-        note = st.text_input("Closing note", value="rolled back the bad release")
-        submitted = st.form_submit_button("Complete it through all three paths")
-
-    task_id = labels[choice]
+    task_id = target["id"]
     st.session_state["selected_task_id"] = task_id
-    st.session_state["selected_task_note"] = note
-
-    if not submitted:
-        return
-
-    selected = next(task for task in all_tasks if task["id"] == task_id)
-    if selected["status"] == "done":
-        st.warning(
-            f"Task #{task_id} is already done. Pick an open (⏳) task to see "
-            "the round-trip comparison."
-        )
-        return
+    st.caption(
+        f"Operating on task **#{task_id} · {target['title']}** "
+        f"(assignee: {target['assignee']}, priority: {target['priority']})."
+    )
 
     api_result = run_direct_api_complete(task_id, note)
     cli_result = run_cli_complete(task_id, note)
@@ -662,7 +675,6 @@ def render_complete_scenario() -> None:
         "complete_task_with_note", {"task_id": task_id, "note": note}
     )
     _record_run(api_result, cli_result, mcp_result)
-    st.balloons()
 
     skills = {
         "Direct API": SKILL_DIRECT_API,
@@ -897,24 +909,25 @@ def render_llm_panel() -> None:
 
 
 def render_takeaways() -> None:
-    st.subheader("Why MCP wins for agents")
+    st.subheader("📖 Lessons from the article")
     st.markdown(
         """
-| Concern | Direct API | CLI | **MCP** |
-|---|---|---|---|
-| Round trips for *complete with note* | 2 | 2 | **1** |
-| Wire bytes per intent (typical) | ~500 | ~700 | **~250** |
-| Caller must know HTTP verbs / paths | yes | yes | **no** |
-| Caller must shell-quote / parse stdout | no | yes | **no** |
-| Tool surface discoverable at runtime | no | no | **yes** |
-| Agent SKILL.md length needed | long | longest | **shortest** |
-| Prompt tokens added to every LLM turn | high | highest | **lowest** |
-| Same client works against any MCP server | no | no | **yes** |
+From *[Building agents that reach production systems with MCP](https://claude.com/blog/building-agents-that-reach-production-systems-with-mcp)*:
 
-The lesson from Anthropic's article: **expose intents, not endpoints.** That's
-what makes MCP servers cheap to integrate against and what keeps agent skills
-short, stable, and portable — and what makes every token of context you spend
-on tool docs go further.
+1. **Three paths exist for connecting agents to systems** — Direct API, CLI,
+   and MCP. Each makes sense somewhere; the question is whether there is a
+   common layer between agents and services, and how far that layer reaches.
+2. **Production agents run in the cloud**, and the systems they reach are
+   cloud-hosted too. MCP is the only path that gives you that reach with
+   standardized auth, discovery, and rich semantics.
+3. **Group tools around intent, not endpoints.** Fewer, well-described tools
+   beat exhaustive API mirrors — `complete_task_with_note(id, note)` beats
+   chaining `PATCH /tasks/{id}` twice. The demo above proves it on real wire
+   bytes and real prompt tokens.
+4. **Skills and MCP are complementary.** MCP gives the agent access to tools;
+   the `SKILL.md` teaches it the procedural knowledge of how to use them. The
+   intent-grouped MCP tool needs a *much* shorter skill, which means a
+   smaller prompt every turn.
         """
     )
 
@@ -953,6 +966,13 @@ def main() -> None:
             "Tear it down with `make destroy`."
         )
         st.divider()
+        st.subheader("Demo data")
+        render_reset_control()
+        st.caption(
+            "Each comparison run completes one task. Reset to start over "
+            "with a fresh batch of three open tasks."
+        )
+        st.divider()
         st.subheader("Activity log")
         log_entries = st.session_state.get("activity_log", [])
         if not log_entries:
@@ -967,6 +987,7 @@ def main() -> None:
 
     render_discovery_panel()
     st.divider()
+    _render_lesson_banner()
     render_complete_scenario()
     st.divider()
     render_llm_panel()
