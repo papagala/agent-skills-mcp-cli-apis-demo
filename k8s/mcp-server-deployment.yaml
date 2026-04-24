@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: mcp-poc
+  labels:
+    app: mcp-server
+    role: integration-layer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+        role: integration-layer
+    spec:
+      containers:
+        - name: mcp-server
+          image: localhost/mcp-poc/mcp-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mcp
+              containerPort: 8000
+          env:
+            - name: TASKS_API_BASE_URL
+              value: "http://tasks-api.mcp-poc.svc.cluster.local:8000"
+            - name: MCP_HOST
+              value: "0.0.0.0"
+            - name: MCP_PORT
+              value: "8000"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
