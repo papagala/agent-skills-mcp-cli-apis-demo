@@ -66,75 +66,75 @@ make check
 # 1. Boot the cluster, build images, deploy everything
 make deploy
 
-# 2. Path 1 — Direct API call
-uv run --python 3.12 --with httpx python examples/direct_api.py
+# 2. Pull a small local LLM into the cluster (~400 MB, one-time)
+make pull-model
 
-# 3. Path 2 — CLI
-sh examples/cli_demo.sh
-
-# 4. Path 3 — MCP
-uv run --python 3.12 --with mcp python examples/mcp_client.py
-
-# 5. (Optional) Pull a small local LLM into the cluster for the demo
-make pull-model       # ~400 MB qwen2.5:0.5b-instruct via Ollama
-
-# 6. Side-by-side Streamlit demo (MCP vs CLI vs API + agent SKILL.md angle)
+# 3. Open the side-by-side Streamlit demo
 make demo
 ```
 
-Total time from zero to all three paths working: **under 5 minutes** on a warm Docker cache.
+Total time from zero to the demo: **under 5 minutes** on a warm Docker cache.
 
 ### `make demo` — the visual comparison
 
 `make demo` boots a Streamlit app that drives the **same backend** through all
-three paths and surfaces the metrics that matter for an agent author:
+three paths against the same user intent (“complete a task with a closing
+note”). It surfaces the metrics that matter for an agent author on **one
+shared y-axis** so the wins read at a glance:
 
-- **Round-trip count** per intent (`complete_task_with_note` is *2* over the
-  Direct API, *2* via CLI, **1** through MCP).
-- **Wire bytes** per call (request + response payload) so you can see the
-  protocol overhead, not just the count.
+- **Round trips** per intent (`complete_task_with_note` is *2* over Direct
+  API, *2* via CLI, **1** through MCP).
+- **Latency (ms)** end-to-end for each path.
+- **Wire bytes** (request + response) so you see the protocol overhead, not
+  just the count, including a stacked request/response breakdown.
+- **SKILL.md token cost** — how many prompt tokens the agent burns *every
+  turn* just to remember how to use each path.
+- **Real LLM in the loop** — a tiny `qwen2.5:0.5b-instruct` running *inside*
+  the Kind cluster is fed each `SKILL.md` and asked to plan the same goal.
+  The app charts the resulting prompt tokens, response tokens, latency, and
+  skill character count side by side. This is the production cost lever the
+  article cares about.
 - **Runtime tool discovery** — only MCP exposes a self-describing tool list.
-- **Agent `SKILL.md` length** required to teach the workflow — the MCP version
-  fits in two lines, the Direct API and CLI versions do not.
-- **Real LLM in the loop** — if you ran `make pull-model`, the app will feed
-  each `SKILL.md` to a tiny `qwen2.5:0.5b-instruct` model running *inside* the
-  Kind cluster and compare the **prompt tokens** each path costs *per turn* of
-  the agent loop. This is the production cost lever the article cares about.
 
 It is the most direct way to *see* why intent-grouped MCP tools shorten agent
 skills and reduce the surface a model has to reason about.
+
+### Poking each path manually (optional)
+
+If you want to drive the paths directly instead of through the UI:
+
+```bash
+# Path 1 — Direct API call
+uv run --python 3.12 --with httpx python examples/direct_api.py
+
+# Path 2 — CLI
+sh examples/cli_demo.sh
+
+# Path 3 — MCP
+uv run --python 3.12 --with mcp python examples/mcp_client.py
+```
 
 ---
 
 ## What You'll See
 
-**Path 1 — Direct API**
+The Streamlit demo opens at <http://localhost:8501>. After clicking
+**▶️ Run the comparison** you get:
 
-```
-Created task 4: Review PR #42
-Completed task 4 with note: approved and merged
-```
+1. A **“What you're learning”** banner that ties the live numbers back to the
+   article's intent-vs-endpoints lesson.
+2. A grouped bar chart of **Round trips, Latency, Wire bytes, Skill tokens**
+   on a shared 0–100% scale (worst path = 100%, raw values printed on top).
+   MCP is visibly the shortest bar on every metric.
+3. A stacked **request/response wire-bytes** chart per path.
+4. Per-path detail cards with the actual code each path runs and the
+   `SKILL.md` it needs.
+5. A second “Real LLM in the loop” panel: prompt tokens, response tokens,
+   latency, and skill chars compared on the same normalized scale, plus the
+   plan the local model produced for each path.
 
-**Path 2 — CLI**
-
-```
-{"id":5,"title":"Roll out feature flag", ... ,"status":"done","note":"flag enabled at 10%"}
-Completed task 5 via CLI.
-```
-
-**Path 3 — MCP**
-
-```
-Discovered intent-grouped tools:
-  - list_open_tasks: Return every task that is not yet done, ordered by API insertion order.
-  - triage_new_task: Create a task and return it ready for work.
-  - complete_task_with_note: Mark a task as done and attach a closing note in a single call.
-
-Triage result: id=6 title='Investigate latency spike'
-Completion result: status=done note='rolled back the bad release'
-```
-
-Notice how the MCP client never touches HTTP semantics or endpoint paths — it only speaks **intents**.
+Notice how the MCP client never touches HTTP semantics or endpoint paths —
+it only speaks **intents**.
 
 ---
 
@@ -149,7 +149,9 @@ Notice how the MCP client never touches HTTP semantics or endpoint paths — it 
 │   ├── tasks-api-deployment.yaml          # FastAPI backend deployment
 │   ├── tasks-api-service.yaml             # NodePort 30080 -> backend
 │   ├── mcp-server-deployment.yaml         # FastMCP server deployment
-│   └── mcp-server-service.yaml            # NodePort 30090 -> MCP server
+│   ├── mcp-server-service.yaml            # NodePort 30090 -> MCP server
+│   ├── ollama-deployment.yaml             # In-cluster Ollama for the demo LLM
+│   └── ollama-service.yaml                # NodePort 30100 -> Ollama
 ├── scripts/
 │   ├── setup.sh                           # One-command bootstrap
 │   └── teardown.sh                        # Clean destruction
@@ -186,10 +188,10 @@ Notice how the MCP client never touches HTTP semantics or endpoint paths — it 
 
 ---
 
-make destroy
+## Teardown
 
 ```bash
-sh scripts/teardown.sh
+make destroy
 ```
 
 That deletes the entire Kind cluster — no leftover containers, networks, or volumes.

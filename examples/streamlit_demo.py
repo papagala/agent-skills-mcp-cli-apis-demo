@@ -437,41 +437,59 @@ def _comparison_chart(
     api_result: PathResult, cli_result: PathResult, mcp_result: PathResult,
     skills: dict[str, str],
 ) -> go.Figure:
+    raw_values = {
+        "Round trips": [
+            len(api_result.traces),
+            len(cli_result.traces),
+            len(mcp_result.traces),
+        ],
+        "Latency (ms)": [
+            round(api_result.elapsed_ms, 1),
+            round(cli_result.elapsed_ms, 1),
+            round(mcp_result.elapsed_ms, 1),
+        ],
+        "Wire bytes": [
+            api_result.wire_bytes,
+            cli_result.wire_bytes,
+            mcp_result.wire_bytes,
+        ],
+        "Skill tokens\u2248": [
+            _estimate_llm_tokens(skills["Direct API"]),
+            _estimate_llm_tokens(skills["CLI"]),
+            _estimate_llm_tokens(skills["MCP"]),
+        ],
+    }
     rows = []
-    for label, result in zip(
-        PATH_LABELS, (api_result, cli_result, mcp_result)
-    ):
-        rows.extend([
-            {"path": label, "metric": "Round trips",
-             "value": len(result.traces)},
-            {"path": label, "metric": "Latency (ms)",
-             "value": round(result.elapsed_ms, 1)},
-            {"path": label, "metric": "Wire bytes",
-             "value": result.wire_bytes},
-            {"path": label, "metric": "Skill tokens≈",
-             "value": _estimate_llm_tokens(skills[label])},
-        ])
+    for metric_name, values in raw_values.items():
+        worst = max(values) or 1
+        for label, value in zip(PATH_LABELS, values):
+            rows.append({
+                "metric": metric_name,
+                "path": label,
+                "relative": 100 * value / worst,
+                "label": str(value),
+            })
     frame = pd.DataFrame(rows)
     figure = px.bar(
-        frame, x="path", y="value", color="path",
-        facet_col="metric", facet_col_wrap=4,
-        color_discrete_map=PATH_COLORS, text="value",
-        category_orders={"path": list(PATH_LABELS)},
+        frame, x="metric", y="relative", color="path",
+        barmode="group", text="label",
+        color_discrete_map=PATH_COLORS,
+        category_orders={
+            "path": list(PATH_LABELS),
+            "metric": list(raw_values.keys()),
+        },
     )
     figure.update_traces(textposition="outside", cliponaxis=False)
     figure.update_layout(
-        showlegend=False,
-        height=320,
-        margin={"t": 50, "b": 30, "l": 30, "r": 10},
+        height=360,
+        margin={"t": 30, "b": 30, "l": 50, "r": 10},
         font={"size": 13},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02,
+                "title": ""},
+        yaxis_title="% of worst path (shorter = better)",
+        xaxis_title="",
     )
-    figure.update_yaxes(matches=None, showticklabels=False, title="")
-    figure.update_xaxes(title="")
-    figure.for_each_annotation(
-        lambda annotation: annotation.update(
-            text=annotation.text.split("=")[-1]
-        )
-    )
+    figure.update_yaxes(range=[0, 115], ticksuffix="%")
     return figure
 
 
@@ -817,6 +835,65 @@ def _plan_with_skill(label: str, skill_md: str, goal: str) -> dict[str, Any]:
     }
 
 
+def _llm_comparison_chart(
+    plans: dict[str, dict[str, Any]], skills: dict[str, str],
+) -> go.Figure:
+    raw_values = {
+        "Prompt tokens": [
+            plans["Direct API"]["prompt_tokens"],
+            plans["CLI"]["prompt_tokens"],
+            plans["MCP"]["prompt_tokens"],
+        ],
+        "Response tokens": [
+            plans["Direct API"]["response_tokens"],
+            plans["CLI"]["response_tokens"],
+            plans["MCP"]["response_tokens"],
+        ],
+        "Latency (ms)": [
+            round(plans["Direct API"]["elapsed_ms"]),
+            round(plans["CLI"]["elapsed_ms"]),
+            round(plans["MCP"]["elapsed_ms"]),
+        ],
+        "Skill chars": [
+            len(skills["Direct API"]),
+            len(skills["CLI"]),
+            len(skills["MCP"]),
+        ],
+    }
+    rows = []
+    for metric_name, values in raw_values.items():
+        worst = max(values) or 1
+        for label, value in zip(PATH_LABELS, values):
+            rows.append({
+                "metric": metric_name,
+                "path": label,
+                "relative": 100 * value / worst,
+                "label": str(value),
+            })
+    frame = pd.DataFrame(rows)
+    figure = px.bar(
+        frame, x="metric", y="relative", color="path",
+        barmode="group", text="label",
+        color_discrete_map=PATH_COLORS,
+        category_orders={
+            "path": list(PATH_LABELS),
+            "metric": list(raw_values.keys()),
+        },
+    )
+    figure.update_traces(textposition="outside", cliponaxis=False)
+    figure.update_layout(
+        height=360,
+        margin={"t": 30, "b": 30, "l": 50, "r": 10},
+        font={"size": 13},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02,
+                "title": ""},
+        yaxis_title="% of worst path (shorter = better)",
+        xaxis_title="",
+    )
+    figure.update_yaxes(range=[0, 115], ticksuffix="%")
+    return figure
+
+
 def render_llm_panel() -> None:
     st.subheader("Real LLM in the loop (Ollama on Kind)")
     st.caption(
@@ -871,12 +948,21 @@ def render_llm_panel() -> None:
                 log_event("error", f"Ollama: {label} failed", error=str(exc))
                 plans[label] = {"error": str(exc)}
 
-    columns = st.columns(3)
     skill_lookup = {
         "Direct API": SKILL_DIRECT_API,
         "CLI": SKILL_CLI,
         "MCP": SKILL_MCP,
     }
+    if all("prompt_tokens" in plan for plan in plans.values()):
+        st.markdown("#### 📊 LLM cost side-by-side")
+        st.plotly_chart(
+            _llm_comparison_chart(plans, skill_lookup),
+            use_container_width=True,
+            config={"displayModeBar": False},
+        )
+
+    st.markdown("#### 🔍 Per-path plans")
+    columns = st.columns(3)
     for column, label in zip(columns, ("Direct API", "CLI", "MCP")):
         column.markdown(f"### {label}")
         plan = plans[label]
