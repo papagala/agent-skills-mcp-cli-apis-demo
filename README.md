@@ -14,20 +14,29 @@ Built to teach the patterns from Anthropic's [*Building agents that reach produc
 ## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph kind[Kind cluster: mcp-poc]
+flowchart TD
+    subgraph clients["Agents / clients"]
         direction LR
-        api[("Tasks API<br/>FastAPI · :8000")]
-        mcp[["MCP Server<br/>FastMCP · streamable-http"]]
-        mcp -->|"intent-grouped<br/>tool calls"| api
+        direct["<b>Path 1</b><br/>Direct API call<br/><i>httpx</i>"]
+        cli["<b>Path 2</b><br/>CLI<br/><i>curl in shell</i>"]
+        agent["<b>Path 3</b><br/>MCP client<br/><i>mcp SDK</i>"]
     end
 
-    direct(["Path 1<br/>Direct API call<br/>(httpx)"]) -->|"HTTP"| api
-    cli(["Path 2<br/>CLI<br/>(curl in shell)"]) -->|"HTTP"| api
-    agent(["Path 3<br/>MCP client<br/>(mcp SDK)"]) -->|"MCP / streamable-http"| mcp
+    subgraph kind["Kind cluster: mcp-poc"]
+        direction TB
+        mcp["<b>MCP Server</b><br/>FastMCP · streamable-http<br/>NodePort :30090"]
+        api[("<b>Tasks API</b><br/>FastAPI · :8000<br/>NodePort :30080")]
+        mcp -- "intent-grouped tool calls" --> api
+    end
 
-    classDef path fill:#eef,stroke:#558,stroke-width:1px;
-    class direct,cli,agent path;
+    direct -- "HTTP" --> api
+    cli -- "HTTP" --> api
+    agent -- "MCP / streamable-http" --> mcp
+
+    classDef client fill:#eef2ff,stroke:#4f46e5,stroke-width:1px,color:#1e1b4b;
+    classDef service fill:#ecfdf5,stroke:#059669,stroke-width:1px,color:#064e3b;
+    class direct,cli,agent client;
+    class mcp,api service;
 ```
 
 The Tasks API plays the role of "the production system." The MCP server wraps it with **intent-grouped tools** rather than mirroring its endpoints — the central design lesson of the article.
