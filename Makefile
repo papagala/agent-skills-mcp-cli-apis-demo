@@ -3,9 +3,10 @@ SHELL := /bin/sh
 REQUIRED_TOOLS := docker kind kubectl uv
 TASKS_API_DIR  := services/tasks_api
 MCP_SERVER_DIR := services/mcp_server
+OLLAMA_MODEL   := qwen2.5:0.5b-instruct
 
 .DEFAULT_GOAL := help
-.PHONY: help check install test deploy destroy
+.PHONY: help check install test deploy destroy demo pull-model
 
 help:
 	@echo "Targets:"
@@ -13,6 +14,8 @@ help:
 	@echo "  install  Sync Python dependencies for both services via uv"
 	@echo "  test     Run unit tests for both services"
 	@echo "  deploy   Bootstrap Kind cluster, build images, apply manifests"
+	@echo "  pull-model  Pull the Ollama model ($(OLLAMA_MODEL)) into the cluster"
+	@echo "  demo     Launch the Streamlit comparison of Direct API, CLI, and MCP"
 	@echo "  destroy  Delete the Kind cluster and all PoC resources"
 
 check:
@@ -39,6 +42,20 @@ test:
 
 deploy:
 	sh scripts/setup.sh
+
+pull-model:
+	@echo "Pulling $(OLLAMA_MODEL) into the in-cluster Ollama (this can take a few minutes)..."
+	kubectl -n mcp-poc exec deploy/ollama -- ollama pull $(OLLAMA_MODEL)
+	@echo "Model ready: $(OLLAMA_MODEL)"
+
+demo:
+	uv run --python 3.12 \
+		--with streamlit==1.39.0 \
+		--with httpx==0.27.2 \
+		--with mcp==1.27.0 \
+		--with plotly==5.24.1 \
+		--with pandas==2.2.3 \
+		streamlit run examples/streamlit_demo.py
 
 destroy:
 	sh scripts/teardown.sh

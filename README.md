@@ -74,9 +74,35 @@ sh examples/cli_demo.sh
 
 # 4. Path 3 — MCP
 uv run --python 3.12 --with mcp python examples/mcp_client.py
+
+# 5. (Optional) Pull a small local LLM into the cluster for the demo
+make pull-model       # ~400 MB qwen2.5:0.5b-instruct via Ollama
+
+# 6. Side-by-side Streamlit demo (MCP vs CLI vs API + agent SKILL.md angle)
+make demo
 ```
 
 Total time from zero to all three paths working: **under 5 minutes** on a warm Docker cache.
+
+### `make demo` — the visual comparison
+
+`make demo` boots a Streamlit app that drives the **same backend** through all
+three paths and surfaces the metrics that matter for an agent author:
+
+- **Round-trip count** per intent (`complete_task_with_note` is *2* over the
+  Direct API, *2* via CLI, **1** through MCP).
+- **Wire bytes** per call (request + response payload) so you can see the
+  protocol overhead, not just the count.
+- **Runtime tool discovery** — only MCP exposes a self-describing tool list.
+- **Agent `SKILL.md` length** required to teach the workflow — the MCP version
+  fits in two lines, the Direct API and CLI versions do not.
+- **Real LLM in the loop** — if you ran `make pull-model`, the app will feed
+  each `SKILL.md` to a tiny `qwen2.5:0.5b-instruct` model running *inside* the
+  Kind cluster and compare the **prompt tokens** each path costs *per turn* of
+  the agent loop. This is the production cost lever the article cares about.
+
+It is the most direct way to *see* why intent-grouped MCP tools shorten agent
+skills and reduce the surface a model has to reason about.
 
 ---
 
@@ -142,7 +168,8 @@ Notice how the MCP client never touches HTTP semantics or endpoint paths — it 
 └── examples/
     ├── direct_api.py                      # Path 1: bare HTTP from Python
     ├── cli_demo.sh                        # Path 2: curl in a shell
-    └── mcp_client.py                      # Path 3: MCP streamable-http client
+    ├── mcp_client.py                      # Path 3: MCP streamable-http client
+    └── streamlit_demo.py                  # `make demo`: side-by-side comparison UI
 ```
 
 ---

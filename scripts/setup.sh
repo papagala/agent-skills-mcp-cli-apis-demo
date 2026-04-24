@@ -41,12 +41,14 @@ kubectl apply -f k8s/
 echo "[5/5] Waiting for deployments to become ready..."
 kubectl -n "${NAMESPACE}" rollout status deployment/tasks-api --timeout=120s
 kubectl -n "${NAMESPACE}" rollout status deployment/mcp-server --timeout=120s
+kubectl -n "${NAMESPACE}" rollout status deployment/ollama --timeout=600s
 
 cat <<'EOF'
 
 Ready.
   Tasks API : http://localhost:30080
   MCP server: http://localhost:30090/mcp
+  Ollama    : http://localhost:30100  (run `make pull-model` to load weights)
 
 Try the three integration paths:
   sh   examples/cli_demo.sh
